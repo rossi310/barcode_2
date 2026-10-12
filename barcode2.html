@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trip Attendance & Tracking App</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Html5-Qrcode Library for camera barcode/QR scanning -->
+    <script src="https://unpkg.com/html5-qrcode"></script>
+</head>
+<body class="bg-gray-100 text-gray-900 font-sans min-h-screen">
+
+    <div class="max-w-md mx-auto p-4 bg-white shadow-lg min-h-screen flex flex-col justify-between">
+        <div>
+            <!-- Header & Mode Selection -->
+            <header class="mb-4">
+                <h1 class="text-xl font-bold text-center text-blue-600">Trip Attendance Tracker</h1>
+                <div class="mt-3">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Select Checkpoint Mode:</label>
+                    <select id="modeSelect" class="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                        <option value="1_initial">1. Initial Check-in</option>
+                        <option value="2_outbound">2. Outbound Coach Boarding</option>
+                        <option value="3_return">3. Return Coach Boarding</option>
+                    </select>
+                </div>
+            </header>
+
+            <!-- Scanner Section -->
+            <div class="bg-black rounded-lg overflow-hidden relative mb-4 shadow-inner">
+                <div id="reader" style="width: 100%;"></div>
+            </div>
+
+            <!-- Status Banner / Feedback -->
+            <div id="statusMessage" class="p-3 mb-4 text-center rounded-lg text-sm font-medium bg-gray-50 border border-gray-200">
+                Ready to scan student badges...
+            </div>
+
+            <!-- Navigation Tabs -->
+            <div class="flex border-b border-gray-200 mb-4">
+                <button onclick="switchTab('scanner')" id="tabScanner" class="flex-1 py-2 text-center font-medium text-blue-600 border-b-2 border-blue-600">Scanner</button>
+                <button onclick="switchTab('dashboard')" id="tabDashboard" class="flex-1 py-2 text-center font-medium text-gray-500">Dashboard</button>
+                <button onclick="switchTab('admin')" id="tabAdmin" class="flex-1 py-2 text-center font-medium text-gray-500">Admin</button>
+            </div>
+
+            <!-- Dashboard View (Hidden by default) -->
+            <div id="dashboardView" class="hidden">
+                <!-- Search Bar -->
+                <div class="mb-3">
+                    <input type="text" id="searchInput" oninput="renderDashboard()" placeholder="Search by name or 8-digit ID..." class="w-full p-2 border border-gray-300 rounded-lg text-sm shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="font-bold text-gray-800">Student List (<span id="studentCount">0</span>)</h2>
+                    <button onclick="toggleMissingFilter()" id="filterBtn" class="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-medium">Show Missing Only</button>
+                </div>
+                <p class="text-xs text-gray-400 mb-2">Tap a student's checkbox to manually toggle their status.</p>
+                <div id="studentList" class="space-y-2 max-h-96 overflow-y-auto pr-1">
+                    <!-- Dynamic student rows inserted here -->
+                </div>
+                
+            </div>
+
+            <!-- Admin View (Hidden by default) -->
+            <div id="adminView" class="hidden space-y-4">
+                <div class="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <h2 class="font-bold text-gray-800 mb-2">Student Database Management</h2>
+                    <p class="text-xs text-gray-500 mb-3">Upload a CSV file (format: <code class="bg-gray-200 px-1 py-0.5 rounded">id,name</code> where ID is exactly 8 digits). <span class="text-red-600 font-semibold">Note: Clears existing records.</span></p>
+                    
+                    <input type="file" id="csvFileInput" accept=".csv" class="text-xs mb-3 w-full p-2 border border-gray-300 rounded bg-white">
+                    <button onclick="uploadCSVToFirestore()" class="w-full bg-blue-600 text-white text-xs py-2 rounded font-medium shadow hover:bg-blue-700">Clear & Upload Students</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer Info -->
+        <footer class="mt-4 text-center text-xs text-gray-400">
+            Firebase Offline Sync Enabled • Staff Member: Staff_A
+        </footer>
+    </div>
+
+    <!-- Firebase SDK & Core Logic -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { 
+            getFirestore, 
+            doc, 
+            updateDoc, 
+            serverTimestamp, 
+            collection, 
+            getDocs,
+            deleteDoc,
+            writeBatch,
+            onSnapshot, 
+            initializeFirestore, 
+            persistentLocalCache, 
+            persistentMultipleTabManager 
+        } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+       const firebaseConfig = {
+            apiKey: "AIzaSyD_3i6we52kL1LwhUFbkkOXW6hv3ct9gR0",
+            authDomain: "database-8b116.firebaseapp.com",
+            databaseURL: "https://database-8b116.firebaseio.com",
+            projectId: "database-8b116",
+            storageBucket: "database-8b116.appspot.com",
+            messagingSenderId: "92775910026",
+            appId: "1:92775910026:web:084fd98414e9e0e23c7b73"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = initializeFirestore(app, {
+            localCache: persistentLocalCache({tabManager: persistentMultipleTabManager()})
+        });
+
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+
+        const auth = getAuth(app);
+
+        // Automatically sign in anonymously when the app opens
+        signInAnonymously(auth)
+        .then(() => {
+            console.log("Logged in anonymously for secure writes.");
+        })
+        .catch((error) => {
+            console.error("Auth error:", error);
+        });
+
+        let currentMode = document.getElementById("modeSelect").value;
+        let showMissingOnly = false;
+        let studentsData = {};
+
+        document.getElementById("modeSelect").addEventListener("change", (e) => {
+            currentMode = e.target.value;
+            renderDashboard();
+        });
+
+        function playSuccessFeedback() {
+            if (navigator.vibrate) navigator.vibrate(200);
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(587.33, audioCtx.currentTime);
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.15);
+        }
+
+        function playErrorFeedback() {
+            if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.type = 'sawtooth';
+            oscillator.frequency.setValueAtTime(150, audioCtx.currentTime);
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.3);
+        }
+
+        function onScanSuccess(decodedText) {
+            const cleanedId = decodedText.trim();
+
+            if (!/^\d{8}$/.test(cleanedId)) {
+                playErrorFeedback();
+                document.getElementById("statusMessage").innerHTML = `<span class="text-amber-600 font-bold">Invalid Barcode: Must be 8 digits (${cleanedId})</span>`;
+                return;
+            }
+
+            const studentRef = doc(db, "students", cleanedId);
+            
+            updateDoc(studentRef, {
+                [`checkpoints.${currentMode}.scanned`]: true,
+                [`checkpoints.${currentMode}.timestamp`]: serverTimestamp(),
+                [`checkpoints.${currentMode}.scannedBy`]: "Staff_A",
+                ...(currentMode === "3_return" && { "missing": false })
+            })
+            .then(() => {
+                playSuccessFeedback();
+                const studentName = studentsData[cleanedId]?.name || cleanedId;
+                document.getElementById("statusMessage").innerHTML = `<span class="text-green-600 font-bold">Checked in: ${studentName}</span>`;
+            })
+            .catch((error) => {
+                playErrorFeedback();
+                document.getElementById("statusMessage").innerHTML = `<span class="text-red-600 font-bold">Error: Student ID not found in database.</span>`;
+                console.error("Scan update error: ", error);
+            });
+        }
+
+        const html5QrCode = new Html5Qrcode("reader");
+        html5QrCode.start(
+            { facingMode: "environment" },
+            { fps: 10, qrbox: { width: 250, height: 150 } },
+            onScanSuccess
+        ).catch(err => {
+            console.error("Camera initialization failed.", err);
+            document.getElementById("statusMessage").innerText = "Camera access denied or not available.";
+        });
+
+        onSnapshot(collection(db, "students"), (snapshot) => {
+            studentsData = {};
+            snapshot.forEach((doc) => {
+                studentsData[doc.id] = doc.data();
+            });
+            renderDashboard();
+        }, (error) => {
+            console.error("Firestore sync error:", error);
+        });
+
+        // Helper function to extract last name for sorting
+        function getLastName(fullName) {
+            if (!fullName) return "";
+            const parts = fullName.trim().split(/\s+/);
+            // If comma format "Last, First", parts[0] is already the last name
+            if (fullName.includes(",")) {
+                return parts[0].replace(",", "").toLowerCase();
+            }
+            // Otherwise, assume "First Last" and return the final word
+            return parts[parts.length - 1].toLowerCase();
+        }
+
+        // Manual checkbox override toggle from the dashboard
+        window.toggleStudentStatus = async function(studentId, currentStatus) {
+            const newStatus = !currentStatus;
+            const studentRef = doc(db, "students", studentId);
+            
+            try {
+                await updateDoc(studentRef, {
+                    [`checkpoints.${currentMode}.scanned`]: newStatus,
+                    [`checkpoints.${currentMode}.timestamp`]: newStatus ? serverTimestamp() : null,
+                    [`checkpoints.${currentMode}.scannedBy`]: newStatus ? "Staff_A_Manual" : null,
+                    ...(currentMode === "3_return" && { "missing": !newStatus })
+                });
+                if (newStatus) playSuccessFeedback();
+            } catch (error) {
+                playErrorFeedback();
+                console.error("Manual toggle error: ", error);
+            }
+        }
+
+        window.uploadCSVToFirestore = async function() {
+            const fileInput = document.getElementById("csvFileInput");
+            if (!fileInput.files.length) {
+                alert("Please select a CSV file first.");
+                return;
+            }
+
+            if (!confirm("Are you sure? This will clear all existing student records and replace them with the CSV file.")) {
+                return;
+            }
+
+            try {
+                document.getElementById("statusMessage").innerHTML = `<span class="text-blue-600 font-bold">Clearing old records...</span>`;
+                
+                const querySnapshot = await getDocs(collection(db, "students"));
+                const deleteBatch = writeBatch(db);
+                querySnapshot.forEach((document) => {
+                    deleteBatch.delete(document.ref);
+                });
+                await deleteBatch.commit();
+
+                const file = fileInput.files[0];
+                const text = await file.text();
+                const rows = text.split("\n");
+
+                const insertBatch = writeBatch(db);
+                let count = 0;
+
+                for (let i = 1; i < rows.length; i++) {
+                    const row = rows[i].trim();
+                    if (!row) continue;
+                    let [id, name] = row.split(",");
+                    if (!id || !name) continue;
+
+                    id = id.trim();
+                    name = name.trim();
+
+                    if (/^\d{8}$/.test(id)) {
+                        const studentRef = doc(db, "students", id);
+                        insertBatch.set(studentRef, {
+                            name: name,
+                            missing: true,
+                            checkpoints: {
+                                "1_initial": { scanned: false, timestamp: null, scannedBy: null },
+                                "2_outbound": { scanned: false, timestamp: null, scannedBy: null },
+                                "3_return": { scanned: false, timestamp: null, scannedBy: null }
+                            }
+                        });
+                        count++;
+                    }
+                }
+
+                await insertBatch.commit();
+                alert(`Successfully cleared and uploaded ${count} students!`);
+                document.getElementById("statusMessage").innerHTML = `<span class="text-green-600 font-bold">Upload complete (${count} students)</span>`;
+            } catch (error) {
+                console.error("Error clearing/uploading CSV:", error);
+                alert("Failed to process CSV. Check console for details.");
+            }
+        }
+
+        window.renderDashboard = function() {
+            const listEl = document.getElementById("studentList");
+            listEl.innerHTML = "";
+            let count = 0;
+
+            // Get search query and convert to lowercase
+            const searchQuery = document.getElementById("searchInput") ? document.getElementById("searchInput").value.toLowerCase() : "";
+
+            // Sort students alphabetically by last name
+            const sortedIds = Object.keys(studentsData).sort((a, b) => {
+                const nameA = getLastName(studentsData[a].name);
+                const nameB = getLastName(studentsData[b].name);
+                return nameA.localeCompare(nameB);
+            });
+
+            sortedIds.forEach(id => {
+                const student = studentsData[id];
+                const studentName = (student.name || "").toLowerCase();
+                const checkpointScanned = student.checkpoints?.[currentMode]?.scanned || false;
+
+                // Filter out if "Missing Only" is toggled
+                if (showMissingOnly && checkpointScanned) return;
+
+                // Filter out if search query doesn't match name or ID
+                if (searchQuery && !studentName.includes(searchQuery) && !id.includes(searchQuery)) {
+                    return;
+                }
+
+                count++;
+                const item = document.createElement("div");
+                item.className = `p-2 rounded border flex justify-between items-center text-sm ${checkpointScanned ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200'}`;
+                item.innerHTML = `
+                    <div class="flex items-center space-x-3">
+                        <input type="checkbox" ${checkpointScanned ? 'checked' : ''} 
+                            onclick="toggleStudentStatus('${id}', ${checkpointScanned})" 
+                            class="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 cursor-pointer">
+                        <div>
+                            <span class="font-bold">${student.name || 'Unknown Student'}</span>
+                            <div class="text-xs text-gray-500">ID: ${id}</div>
+                        </div>
+                    </div>
+                    <div>
+                        <span class="px-2 py-1 text-xs rounded font-medium ${checkpointScanned ? 'bg-green-200 text-green-800' : 'bg-red-100 text-red-800'}">
+                            ${checkpointScanned ? 'Checked In' : 'Missing'}
+                        </span>
+                    </div>
+                `;
+                listEl.appendChild(item);
+            });
+            document.getElementById("studentCount").innerText = count;
+        }
+
+        window.switchTab = function(tab) {
+            const scannerView = document.getElementById("reader").parentElement;
+            const dashboardView = document.getElementById("dashboardView");
+            const adminView = document.getElementById("adminView");
+            
+            const tabScanner = document.getElementById("tabScanner");
+            const tabDashboard = document.getElementById("tabDashboard");
+            const tabAdmin = document.getElementById("tabAdmin");
+
+            tabScanner.className = "flex-1 py-2 text-center font-medium text-gray-500";
+            tabDashboard.className = "flex-1 py-2 text-center font-medium text-gray-500";
+            tabAdmin.className = "flex-1 py-2 text-center font-medium text-gray-500";
+
+            scannerView.classList.add("hidden");
+            dashboardView.classList.add("hidden");
+            adminView.classList.add("hidden");
+
+            if (tab === 'scanner') {
+                scannerView.classList.remove("hidden");
+                tabScanner.className = "flex-1 py-2 text-center font-medium text-blue-600 border-b-2 border-blue-600";
+            } else if (tab === 'dashboard') {
+                dashboardView.classList.remove("hidden");
+                tabDashboard.className = "flex-1 py-2 text-center font-medium text-blue-600 border-b-2 border-blue-600";
+                renderDashboard();
+            } else if (tab === 'admin') {
+                adminView.classList.remove("hidden");
+                tabAdmin.className = "flex-1 py-2 text-center font-medium text-blue-600 border-b-2 border-blue-600";
+            }
+        }
+
+        window.toggleMissingFilter = function() {
+            showMissingOnly = !showMissingOnly;
+            const btn = document.getElementById("filterBtn");
+            if (showMissingOnly) {
+                btn.className = "text-xs bg-amber-500 text-white px-2 py-1 rounded font-medium";
+                btn.innerText = "Showing Missing Only";
+            } else {
+                btn.className = "text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-medium";
+                btn.innerText = "Show Missing Only";
+            }
+            renderDashboard();
+        }
+    </script>
+</body>
+</html>
