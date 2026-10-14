@@ -45,26 +45,32 @@
 
             <!-- Dashboard View (Hidden by default) -->
             <div id="dashboardView" class="hidden">
-                <!-- Search Bar -->
-                <div class="mb-3">
-                    <input type="text" id="searchInput" oninput="renderDashboard()" placeholder="Search by name or 8-digit ID..." class="w-full p-2 border border-gray-300 rounded-lg text-sm shadow-sm focus:ring-blue-500 focus:border-blue-500">
-                </div>
-                <div class="flex justify-between items-center mb-3">
+                <div class="flex justify-between items-center mb-2">
                     <h2 class="font-bold text-gray-800">Student List (<span id="studentCount">0</span>)</h2>
-                    <button onclick="toggleMissingFilter()" id="filterBtn" class="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-medium">Show Missing Only</button>
-                </div>
-                <p class="text-xs text-gray-400 mb-2">Tap a student's checkbox to manually toggle their status.</p>
-                <div id="studentList" class="space-y-2 max-h-96 overflow-y-auto pr-1">
-                    <!-- Dynamic student rows inserted here -->
                 </div>
                 
+                <!-- Search & Filters -->
+                <div class="space-y-2 mb-3">
+                    <input type="text" id="searchInput" oninput="renderDashboard()" placeholder="Search by name or 8-digit ID..." class="w-full p-2 border border-gray-300 rounded-lg text-sm shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                    
+                    <div class="flex gap-2">
+                        <select id="coachFilter" onchange="renderDashboard()" class="w-1/2 p-2 border border-gray-300 rounded-lg text-sm bg-white shadow-sm">
+                            <option value="all">All Coaches</option>
+                        </select>
+                        <button onclick="toggleMissingFilter()" id="filterBtn" class="w-1/2 text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-medium shadow-sm">Show Missing Only</button>
+                    </div>
+                </div>
+
+                <div id="studentList" class="space-y-2 max-h-80 overflow-y-auto pr-1">
+                    <!-- Dynamic student rows inserted here -->
+                </div>
             </div>
 
             <!-- Admin View (Hidden by default) -->
             <div id="adminView" class="hidden space-y-4">
                 <div class="p-4 bg-gray-50 rounded-lg border border-gray-200">
                     <h2 class="font-bold text-gray-800 mb-2">Student Database Management</h2>
-                    <p class="text-xs text-gray-500 mb-3">Upload a CSV file (format: <code class="bg-gray-200 px-1 py-0.5 rounded">id,name</code> where ID is exactly 8 digits). <span class="text-red-600 font-semibold">Note: Clears existing records.</span></p>
+                    <p class="text-xs text-gray-500 mb-3">Upload a CSV file (format: <code class="bg-gray-200 px-1 py-0.5 rounded">id,name,coach</code> where ID is 8 digits). <span class="text-red-600 font-semibold">Note: Clears existing records.</span></p>
                     
                     <input type="file" id="csvFileInput" accept=".csv" class="text-xs mb-3 w-full p-2 border border-gray-300 rounded bg-white">
                     <button onclick="uploadCSVToFirestore()" class="w-full bg-blue-600 text-white text-xs py-2 rounded font-medium shadow hover:bg-blue-700">Clear & Upload Students</button>
@@ -106,6 +112,7 @@
             appId: "1:92775910026:web:084fd98414e9e0e23c7b73"
         };
 
+        
         const app = initializeApp(firebaseConfig);
         const db = initializeFirestore(app, {
             localCache: persistentLocalCache({tabManager: persistentMultipleTabManager()})
@@ -127,6 +134,10 @@
         let currentMode = document.getElementById("modeSelect").value;
         let showMissingOnly = false;
         let studentsData = {};
+
+        // Debounce variables to prevent constant re-scanning of the same badge
+        let lastScannedCode = "";
+        let lastScanTime = 0;
 
         document.getElementById("modeSelect").addEventListener("change", (e) => {
             currentMode = e.target.value;
@@ -161,12 +172,22 @@
 
         function onScanSuccess(decodedText) {
             const cleanedId = decodedText.trim();
+            const now = Date.now();
+
+            // Ignore if it's the exact same code scanned within the last 3 seconds
+            if (cleanedId === lastScannedCode && (now - lastScanTime < 3000)) {
+                return;
+            }
 
             if (!/^\d{8}$/.test(cleanedId)) {
                 playErrorFeedback();
                 document.getElementById("statusMessage").innerHTML = `<span class="text-amber-600 font-bold">Invalid Barcode: Must be 8 digits (${cleanedId})</span>`;
                 return;
             }
+
+            // Update debounce tracker
+            lastScannedCode = cleanedId;
+            lastScanTime = now;
 
             const studentRef = doc(db, "students", cleanedId);
             
@@ -203,24 +224,21 @@
             snapshot.forEach((doc) => {
                 studentsData[doc.id] = doc.data();
             });
+            updateCoachDropdown();
             renderDashboard();
         }, (error) => {
             console.error("Firestore sync error:", error);
         });
 
-        // Helper function to extract last name for sorting
         function getLastName(fullName) {
             if (!fullName) return "";
             const parts = fullName.trim().split(/\s+/);
-            // If comma format "Last, First", parts[0] is already the last name
             if (fullName.includes(",")) {
                 return parts[0].replace(",", "").toLowerCase();
             }
-            // Otherwise, assume "First Last" and return the final word
             return parts[parts.length - 1].toLowerCase();
         }
 
-        // Manual checkbox override toggle from the dashboard
         window.toggleStudentStatus = async function(studentId, currentStatus) {
             const newStatus = !currentStatus;
             const studentRef = doc(db, "students", studentId);
@@ -270,16 +288,18 @@
                 for (let i = 1; i < rows.length; i++) {
                     const row = rows[i].trim();
                     if (!row) continue;
-                    let [id, name] = row.split(",");
-                    if (!id || !name) continue;
+                    let parts = row.split(",");
+                    if (parts.length < 2) continue;
 
-                    id = id.trim();
-                    name = name.trim();
+                    let id = parts[0].trim();
+                    let name = parts[1].trim();
+                    let coach = parts[2] ? parts[2].trim() : "1"; // Default to coach 1 if omitted
 
                     if (/^\d{8}$/.test(id)) {
                         const studentRef = doc(db, "students", id);
                         insertBatch.set(studentRef, {
                             name: name,
+                            coach: coach,
                             missing: true,
                             checkpoints: {
                                 "1_initial": { scanned: false, timestamp: null, scannedBy: null },
@@ -300,16 +320,43 @@
             }
         }
 
+        function updateCoachDropdown() {
+            const coachSelect = document.getElementById("coachFilter");
+            if (!coachSelect) return;
+            const currentSelected = coachSelect.value;
+
+            // Collect unique coaches
+            const coaches = new Set();
+            Object.values(studentsData).forEach(s => {
+                if (s.coach) coaches.add(s.coach);
+            });
+
+            coachSelect.innerHTML = '<option value="all">All Coaches</option>';
+            Array.from(coaches).sort((a, b) => a.localeCompare(b, undefined, {numeric: true})).forEach(c => {
+                const opt = document.createElement("option");
+                opt.value = c;
+                opt.innerText = `Coach ${c}`;
+                coachSelect.appendChild(opt);
+            });
+
+            coachSelect.value = coaches.has(currentSelected) ? currentSelected : "all";
+        }
+
         window.renderDashboard = function() {
             const listEl = document.getElementById("studentList");
             listEl.innerHTML = "";
             let count = 0;
 
-            // Get search query and convert to lowercase
             const searchQuery = document.getElementById("searchInput") ? document.getElementById("searchInput").value.toLowerCase() : "";
+            const selectedCoach = document.getElementById("coachFilter") ? document.getElementById("coachFilter").value : "all";
 
-            // Sort students alphabetically by last name
+            // Sort primarily by Coach, then secondarily by Last Name
             const sortedIds = Object.keys(studentsData).sort((a, b) => {
+                const coachA = studentsData[a].coach || "";
+                const coachB = studentsData[b].coach || "";
+                if (coachA !== coachB) {
+                    return coachA.localeCompare(coachB, undefined, {numeric: true});
+                }
                 const nameA = getLastName(studentsData[a].name);
                 const nameB = getLastName(studentsData[b].name);
                 return nameA.localeCompare(nameB);
@@ -318,15 +365,12 @@
             sortedIds.forEach(id => {
                 const student = studentsData[id];
                 const studentName = (student.name || "").toLowerCase();
+                const studentCoach = student.coach || "1";
                 const checkpointScanned = student.checkpoints?.[currentMode]?.scanned || false;
 
-                // Filter out if "Missing Only" is toggled
                 if (showMissingOnly && checkpointScanned) return;
-
-                // Filter out if search query doesn't match name or ID
-                if (searchQuery && !studentName.includes(searchQuery) && !id.includes(searchQuery)) {
-                    return;
-                }
+                if (selectedCoach !== "all" && studentCoach !== selectedCoach) return;
+                if (searchQuery && !studentName.includes(searchQuery) && !id.includes(searchQuery)) return;
 
                 count++;
                 const item = document.createElement("div");
@@ -338,7 +382,7 @@
                             class="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 cursor-pointer">
                         <div>
                             <span class="font-bold">${student.name || 'Unknown Student'}</span>
-                            <div class="text-xs text-gray-500">ID: ${id}</div>
+                            <div class="text-xs text-gray-500">ID: ${id} | <span class="font-semibold text-blue-600">Coach ${studentCoach}</span></div>
                         </div>
                     </div>
                     <div>
@@ -386,10 +430,10 @@
             showMissingOnly = !showMissingOnly;
             const btn = document.getElementById("filterBtn");
             if (showMissingOnly) {
-                btn.className = "text-xs bg-amber-500 text-white px-2 py-1 rounded font-medium";
+                btn.className = "w-1/2 text-xs bg-amber-500 text-white px-2 py-1 rounded font-medium shadow-sm";
                 btn.innerText = "Showing Missing Only";
             } else {
-                btn.className = "text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-medium";
+                btn.className = "w-1/2 text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-medium shadow-sm";
                 btn.innerText = "Show Missing Only";
             }
             renderDashboard();
