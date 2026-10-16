@@ -26,6 +26,13 @@
                 </div>
             </header>
 
+             <!-- Navigation Tabs -->
+            <div class="flex border-b border-gray-200 mb-4">
+                <button onclick="switchTab('scanner')" id="tabScanner" class="flex-1 py-2 text-center font-medium text-blue-600 border-b-2 border-blue-600">Scanner</button>
+                <button onclick="switchTab('dashboard')" id="tabDashboard" class="flex-1 py-2 text-center font-medium text-gray-500">Dashboard</button>
+                <button onclick="switchTab('admin')" id="tabAdmin" class="flex-1 py-2 text-center font-medium text-gray-500">Admin</button>
+            </div>
+            
             <!-- Scanner Section -->
             <div class="bg-black rounded-lg overflow-hidden relative mb-4 shadow-inner">
                 <div id="reader" style="width: 100%;"></div>
@@ -36,12 +43,7 @@
                 Ready to scan student badges...
             </div>
 
-            <!-- Navigation Tabs -->
-            <div class="flex border-b border-gray-200 mb-4">
-                <button onclick="switchTab('scanner')" id="tabScanner" class="flex-1 py-2 text-center font-medium text-blue-600 border-b-2 border-blue-600">Scanner</button>
-                <button onclick="switchTab('dashboard')" id="tabDashboard" class="flex-1 py-2 text-center font-medium text-gray-500">Dashboard</button>
-                <button onclick="switchTab('admin')" id="tabAdmin" class="flex-1 py-2 text-center font-medium text-gray-500">Admin</button>
-            </div>
+           
 
             <!-- Dashboard View (Hidden by default) -->
             <div id="dashboardView" class="hidden">
